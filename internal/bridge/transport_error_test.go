@@ -15,22 +15,21 @@ import (
 
 func TestHTTPCallbackTransportFaultsStayRequestScoped(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		err    error
-		kind   string
-		status int
+		name, kind, transport string
+		err                   error
+		status                int
 	}{
-		{"reset", syscall.ECONNRESET, upstreamNetworkKind, 502},
-		{"eof", io.ErrUnexpectedEOF, upstreamNetworkKind, 502},
-		{"dns", &net.DNSError{Err: "fixture"}, upstreamNetworkKind, 502},
-		{"cancel", context.Canceled, requestCanceledKind, 499},
-		{"deadline", context.DeadlineExceeded, requestDeadlineKind, 504},
+		{"reset", upstreamNetworkKind, "connection_reset", syscall.ECONNRESET, 502},
+		{"eof", upstreamNetworkKind, "eof", io.ErrUnexpectedEOF, 502},
+		{"dns", upstreamNetworkKind, "dns", &net.DNSError{Err: "fixture"}, 502},
+		{"cancel", requestCanceledKind, "", context.Canceled, 499},
+		{"deadline", requestDeadlineKind, "", context.DeadlineExceeded, 504},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := &url.Error{Op: "Post", URL: "https://fixture-user:fixture-secret@example.invalid", Err: tc.err}
 			fault := hostHTTPFault(err, nil, "upstream transport failed")
 			var upstream *upstreamError
-			if !errors.As(fault, &upstream) || upstream.Kind != tc.kind || upstream.Status != tc.status || !upstream.IsRequestScoped() {
+			if !errors.As(fault, &upstream) || upstream.Kind != tc.kind || upstream.TransportKind != tc.transport || upstream.Status != tc.status || !upstream.IsRequestScoped() {
 				t.Fatalf("fault = %#v", fault)
 			}
 			if strings.Contains(fault.Error(), "fixture-secret") {
@@ -40,6 +39,46 @@ func TestHTTPCallbackTransportFaultsStayRequestScoped(t *testing.T) {
 	}
 	if fault := hostHTTPFault(errors.New("connection reset; deadline exceeded"), nil, "upstream transport failed"); fault.(*upstreamError).Kind != upstreamCallbackKind {
 		t.Fatal("legacy callback lost its callback source classification")
+	}
+}
+
+func TestTransportEOFIdentityHonorsLifecycleAndStructuredMetadata(t *testing.T) {
+	for _, reason := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(reason.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			cancel(reason)
+			fault := typedTransportFault(ctx, io.ErrUnexpectedEOF, "upstream interrupted")
+			upstream, ok := fault.(*upstreamError)
+			want := requestCanceledKind
+			if reason == context.DeadlineExceeded {
+				want = requestDeadlineKind
+			}
+			if !ok || upstream.Kind != want || upstream.TransportKind != "" {
+				t.Fatalf("EOF replaced the caller lifecycle cause: %#v", fault)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, code, kind, transport string
+		status                      int
+	}{
+		{"structured EOF", upstreamNetworkKind, "eof", "eof", 502},
+		{"structured cancellation", requestCanceledKind, "canceled", "", 499},
+		{"structured deadline", requestDeadlineKind, "deadline", "", 504},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Display text has no authority over the structured fault identity.
+			fault := hostHTTPFault(errors.New("unexpected EOF; context canceled; (eof)"), &httpErrorDetails{Kind: tc.kind, Code: tc.code, HTTPStatus: tc.status}, "upstream interrupted (eof)")
+			upstream, ok := fault.(*upstreamError)
+			if !ok || upstream.Kind != tc.code || upstream.TransportKind != tc.transport || upstream.Status != tc.status {
+				t.Fatalf("structured callback classification was replaced by text: %#v", fault)
+			}
+		})
+	}
+	fault := hostHTTPFault(errors.New("unexpected EOF; context canceled; (eof)"), &httpErrorDetails{Kind: "eof; context canceled", Code: upstreamNetworkKind, HTTPStatus: 502}, "upstream interrupted")
+	if upstream, ok := fault.(*upstreamError); !ok || upstream.Kind != upstreamCallbackKind || upstream.TransportKind != "" {
+		t.Fatalf("invalid structured kind or EOF-like text forged typed EOF: %#v", fault)
 	}
 }
 

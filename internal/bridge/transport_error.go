@@ -58,8 +58,9 @@ type httpErrorDetails struct {
 
 func upstreamNetworkFailure(kind, message string) error {
 	return &upstreamError{
-		APIError: &APIError{Status: 502, Kind: upstreamNetworkKind, Message: "HTTP 502: " + message + " (" + kind + ")"},
-		Scope:    "request",
+		APIError:      &APIError{Status: 502, Kind: upstreamNetworkKind, Message: "HTTP 502: " + message + " (" + kind + ")"},
+		Scope:         "request",
+		TransportKind: kind,
 	}
 }
 

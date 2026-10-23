@@ -174,7 +174,7 @@ models:
 
 已核对的原版 CPA v8.0.13、v8.0.29 流错误接口只传字符串。插件对上述已分类的请求故障使用 EOF/timeout 识别词或明确的 `[clinepassbridge:cpa_compat:...]` 标签，并在对应 RPC 错误中省略内部 `http_status`（0 表示缺失）；除下述 Chat Completions 兼容结构外，下游由 CPA 默认封装为 500，已开始的 HTTP 200 通过 SSE error 结束，插件日志保留内部状态。此类 RPC 故障不再匹配自定义的 500/502 状态规则。兼容标签仅用于宿主分类，不表示已经确认底层断流原因。
 
-开启「重试兼容」时，原始请求路径为 `/v1/chat/completions`、已开始输出（`after_output`），且明确归为请求范围的 `upstream_service_error` 5xx、未命中显式规则或冷却/停止策略的流错误，使用单行 JSON：`error.type="server_error"`、`error.code="500"`，`message` 保留原兼容摘要和宿主分类标签。`500` 是供客户端识别的兼容业务码；已开始的 HTTP 200、日志原始状态/异常及 `error_details` 的真实 code/status 保持原语义。其他接口、缺少路径或关闭开关时沿用原编码。
+开启「重试兼容」时，原始请求路径为 `/v1/chat/completions`、已开始输出（`after_output`），且明确归为请求范围的 5xx、未命中显式规则或冷却/停止策略的流错误，使用单行 JSON：`error.type="server_error"`、`error.code="500"`。适用错误仅为 `upstream_service_error`，或内部网络子类型为 `eof` 的 `upstream_network_error`；EOF 依据传输错误类型、流完整性检查或已验证的结构化回调识别，不按报错文字猜测，其他网络故障沿用原编码。`message` 保留原兼容摘要和宿主分类标签。`500` 是供客户端识别的兼容业务码；已开始的 HTTP 200、日志原始状态/异常及 `error_details` 的真实 code/status 保持原语义。其他接口、缺少路径或关闭开关时沿用原编码。
 
 该结构已用本机安装的 ZCode 3.16.2 解析与分类代码离线验证；客户端重试或回合恢复仍取决于输出/工具状态和自身预算，尚未完成整客户端交互验收。插件只编码错误，不新增上游请求或透明重放；上游故障仍以失败记录。
 

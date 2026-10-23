@@ -72,16 +72,26 @@ func requestErrorClientMessage(err error) string {
 // Stock CPA forwards JSON in its string-only stream error callback. ZCode
 // recognizes the numeric service-error code even when the HTTP stream is 200;
 // its standard internal_server_error code otherwise becomes unknown/nonretryable.
-// Only a classified service fault after Chat output uses this compatibility
-// envelope. Keep the original host marker in message for cooldown classification.
+// Only a classified service fault or response EOF after Chat output uses this
+// envelope. Preserve the typed EOF identity and the host's cooldown marker;
+// error text alone must not grant retry compatibility to another fault.
 func (s *Service) clientStreamErrorMessage(requestPath, phase string, err error) string {
 	message, _ := s.hostErrorDetails(err, true)
 	if s == nil || requestPath != "/v1/chat/completions" || phase != "after_output" || !s.config().ClientRetryCompatibility {
 		return message
 	}
 	var upstream *upstreamError
-	if !errors.As(err, &upstream) || upstream.Kind != upstreamServiceKind || upstream.Scope != "request" ||
+	if !errors.As(err, &upstream) || upstream.Scope != "request" ||
 		upstream.Status < 500 || upstream.Status > 599 {
+		return message
+	}
+	switch upstream.Kind {
+	case upstreamServiceKind:
+	case upstreamNetworkKind:
+		if upstream.TransportKind != "eof" {
+			return message
+		}
+	default:
 		return message
 	}
 	policy := s.hostFaultPolicy(err)

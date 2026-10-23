@@ -37,6 +37,7 @@ type upstreamError struct {
 	*APIError
 	HTTPStatus     int
 	UpstreamStatus int
+	TransportKind  string // Classified at the transport source, never inferred from Message.
 	RetryAt        time.Time
 	Scope          string
 	Local          bool
