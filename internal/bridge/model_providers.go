@@ -13,7 +13,7 @@ import (
 // account on the public gateway lists its candidates, while one diverted to the
 // private pool reports none. So this is a probe, not a static table.
 var fallbacksPattern = regexp.MustCompile(`"fallbacksAvailable"\s*:\s*\[(.*?)\]`)
-var servedByPattern = regexp.MustCompile(`"(?:resolvedProvider|finalProvider)"\s*:\s*"([^"]+)"`)
+var servedByPattern = regexp.MustCompile(`"(resolvedProvider|finalProvider)"\s*:\s*"([^"]+)"`)
 var quotedPattern = regexp.MustCompile(`"([^"]+)"`)
 
 // discoverProviders probes one model and returns the providers it may be pinned
@@ -59,15 +59,13 @@ func (s *Service) discoverProviders(r ManagementRequest) (any, error) {
 		AuthID: credential.ID, Model: in.Model, HostCallbackID: r.HostCallbackID,
 		Metadata: map[string]any{"egress_management": true},
 		deadline: start.Add(time.Duration(cfg.TimeoutSeconds) * time.Second),
-		Payload:  []byte(`{"messages":[{"role":"user","content":"ok"}],"max_tokens":16}`),
+		Payload:  []byte(`{"messages":[{"role":"user","content":"ok"}],"max_tokens":64}`),
 	}
 	j, credential, upstream, err := s.prepareProbe(req, in.CredentialID)
-	// The probe asks what this model *can* be pinned to, so it must not carry
-	// the model's own pin: a request pinned to one provider reports no
-	// alternatives, which would make an already-pinned model look unpinnable.
+	var has any
+	var hasPresent bool
 	if err == nil {
-		delete(j, "provider")
-		delete(j, "providerOptions")
+		has, hasPresent = unpinProviderProbe(j)
 	}
 	entry := s.newLog(req, credential, upstream)
 	s.applyReasoningMapping(j, &entry)
@@ -102,9 +100,9 @@ func (s *Service) discoverProviders(r ManagementRequest) (any, error) {
 	case len(candidates) > 0:
 		note = "上游回报的候选托管方"
 	case served != "":
-		note = "上游只回报了本次实际使用的托管方，没有候选列表；该账号可能无法钉上游"
+		note = "上游仅回报本次实际提供方，未列出其他候选"
 	default:
-		note = "上游没有回报任何托管方，无法固定"
+		note = "上游未回报提供方或候选，请查看测试结果"
 	}
 	detail := ""
 	if err != nil {
@@ -113,13 +111,30 @@ func (s *Service) discoverProviders(r ManagementRequest) (any, error) {
 			detail += "\n\n上游响应 / 传输详情：\n" + redactModelTest(diagnostics.body.String(), credential)
 		}
 	}
-	return managementJSON(200, map[string]any{
+	response := map[string]any{
 		"ok": len(candidates) > 0 || served != "", "status": statusOf(err), "error": detail,
 		"model": in.Model, "upstream_id": upstream, "duration_ms": duration,
 		"credential_id": credential.ID, "credential_label": credential.Label,
 		"providers": candidates, "served_by": served, "note": note,
 		"probed_at": time.Now().UTC(),
-	})
+	}
+	if hasPresent {
+		response["has"] = has
+	}
+	return managementJSON(200, response)
+}
+
+// unpinProviderProbe removes routing hints so discovery can report alternatives,
+// while keeping the effective capability filter that selects the route itself.
+// Field presence matters: explicit null and [] must survive unchanged.
+func unpinProviderProbe(j map[string]any) (any, bool) {
+	has, present := object(object(j["providerOptions"])["gateway"])["has"]
+	delete(j, "provider")
+	delete(j, "providerOptions")
+	if present {
+		j["providerOptions"] = map[string]any{"gateway": map[string]any{"has": has}}
+	}
+	return has, present
 }
 
 // prepareProbe bypasses only manual disablement for an explicitly selected
@@ -193,14 +208,24 @@ func routingCandidates(raw string) ([]string, string) {
 		}
 	}
 	served := ""
-	if match := servedByPattern.FindStringSubmatch(text); len(match) == 2 {
-		served = strings.TrimSpace(match[1])
+	for _, match := range servedByPattern.FindAllStringSubmatch(text, -1) {
+		provider := strings.TrimSpace(match[2])
+		if provider == "" {
+			continue
+		}
+		if served == "" || match[1] == "finalProvider" {
+			served = provider
+		}
+		// The final routing decision supersedes a provisional resolvedProvider,
+		// even when the latter appears first in a frame or an earlier SSE event.
+		if match[1] == "finalProvider" {
+			break
+		}
 	}
 	// fallbacksAvailable omits the provider that actually served, so add it
-	// back — but only when the gateway reported candidates at all. An empty list
-	// with a served provider means the account is on a private route where
-	// nothing is pinnable, and offering that pseudo-provider would only produce
-	// requests that always fail.
+	// back only when the gateway reported alternatives. An empty or missing list
+	// alone does not prove that the served provider can be pinned; private routes
+	// also report a served provider without alternatives.
 	if len(out) > 0 && served != "" && !seen[strings.ToLower(served)] {
 		out = append(out, strings.ToLower(served))
 	}

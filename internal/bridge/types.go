@@ -17,10 +17,10 @@ const PluginID = "clinepassbridge"
 
 // How a client-supplied provider preference interacts with the per-model one.
 const (
-	// ProviderPolicyClient lets the caller's own gateway options win. Default.
+	// ProviderPolicyClient lets the caller's own gateway options win.
 	ProviderPolicyClient = "client"
-	// ProviderPolicyConfig pins every request to the configured providers and
-	// rejects caller overrides.
+	// ProviderPolicyConfig uses configured providers and capability filters,
+	// ignoring caller overrides. This is the default policy.
 	ProviderPolicyConfig = "config"
 )
 

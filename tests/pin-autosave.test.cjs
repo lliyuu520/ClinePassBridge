@@ -22,13 +22,13 @@ const code = [
   section('    const parseProviders =', '    function providerProbeHTML('),
   section("    $('pinModelList').addEventListener('input'", '    function syncModelTestCredentials('),
   section("    $('providerPolicy').addEventListener('change'", '    function selectedReasoningModel('),
-  'globalThis.flushModels = flushPinModels; globalThis.flushPolicy = flushProviderPolicy;',
+  'globalThis.flushModels = flushPinModels; globalThis.flushPolicy = flushProviderPolicy; globalThis.applyPreset = applyDeepseekPinPreset;',
 ].join('\n');
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const key = model => JSON.stringify([model.id, model.upstream_id]);
 const fixtures = () => [
-  { id: 'a', upstream_id: 'cline-pass/a', providers: ['old-a'], reasoning_mapping: { enabled: true, rules: { low: 'medium' } } },
+  { id: 'a', upstream_id: 'cline-pass/deepseek-v4.1-flash-1017', providers: ['old-a'], has: ['old-capability'], reasoning_mapping: { enabled: true, rules: { low: 'medium' } } },
   { id: 'b', upstream_id: 'cline-pass/b', providers: ['old-b'], reasoning_mapping: { enabled: false, rules: {} } },
   { id: 'untouched', upstream_id: 'cline-pass/untouched', providers: ['existing'], reasoning_mapping: { enabled: true, rules: { high: 'max' } } },
 ];
@@ -44,6 +44,7 @@ function page(intercept = async () => {}) {
   const initial = fixtures();
   const nodes = new Map();
   const inputs = new Map();
+  const hasInputs = new Map();
   const calls = [];
   const timers = new Map();
   let now = 0;
@@ -74,7 +75,8 @@ function page(intercept = async () => {}) {
   }
   function buildInputs() {
     inputs.clear();
-    for (const model of state.models) {
+    hasInputs.clear();
+    for (const [index, model] of state.models.entries()) {
       const badge = { textContent: '', classList: { toggle() {} } };
       const row = { querySelector: () => badge };
       inputs.set(model.id, {
@@ -83,17 +85,25 @@ function page(intercept = async () => {}) {
         closest: () => row,
         matches: selector => selector === 'input[data-model-key]',
       });
+      hasInputs.set(model.id, {
+        dataset: { hasKey: key(model) }, value: (model.has || []).join(', '),
+        selectionStart: 0, selectionEnd: 0,
+        closest: () => row,
+        matches: selector => selector === 'input[data-has-key]',
+      });
+      nodes.set(`pinProviders-${index}`, inputs.get(model.id));
+      nodes.set(`pinHas-${index}`, hasInputs.get(model.id));
     }
   }
   buildInputs();
-  node('pinModelList').querySelectorAll = selector => selector === 'input[data-model-key]' ? [...inputs.values()] : [];
+  node('pinModelList').querySelectorAll = selector => selector === 'input[data-model-key]' ? [...inputs.values()] : selector === 'input[data-has-key]' ? [...hasInputs.values()] : [];
   node('providerPolicy').value = server.provider_policy;
   const document = { activeElement: null };
   const context = vm.createContext({
     state, document, reasoningMappingBusy: false, $: node,
     present: value => value !== undefined && value !== null && value !== '',
     renderProviderOptions() {}, renderModelRows() {}, renderReasoningModels() {},
-    resetModelForm() {}, renderCandidateList() {}, syncProviderProbeControls() {}, syncPinModelTests() {},
+    resetModelForm() {}, renderCandidateList() {}, syncProviderProbeControls() {}, syncProviderProbeResults() {}, syncPinModelTests() {},
     renderPinModelRows: buildInputs,
     setTimeout(callback, delay) {
       const id = ++timerID;
@@ -121,7 +131,7 @@ function page(intercept = async () => {}) {
   });
   vm.runInContext(code, context);
   return {
-    state, nodes, inputs, calls, initial, server,
+    state, nodes, inputs, hasInputs, calls, initial, server,
     get maxActive() { return maxActive; },
     async advance(milliseconds) {
       const target = now + milliseconds;
@@ -142,6 +152,13 @@ function page(intercept = async () => {}) {
       document.activeElement = input;
       return node('pinModelList').emit('input', { target: input });
     },
+    editHas(id, value) {
+      const input = hasInputs.get(id);
+      input.value = value;
+      document.activeElement = input;
+      return node('pinModelList').emit('input', { target: input });
+    },
+    applyPreset: id => context.applyPreset(state.models.find(model => model.id === id)),
     choosePolicy(value) {
       node('providerPolicy').value = value;
       return node('providerPolicy').emit('change');
@@ -168,6 +185,26 @@ test('白名单防抖合并保存，保留模型其他属性并将清空值保�
   assert.deepEqual(view.calls[0].body.models, expected);
   assert.deepEqual(view.server.models, expected);
   assert.deepEqual(clone(view.state.models), expected);
+  assert.equal(view.nodes.get('pinModelsState').dataset.phase, 'saved');
+});
+
+test('DeepSeek 预设一次保存提供方和能力，保留其他模型并支持随后显式清空能力', async () => {
+  const view = page();
+  view.applyPreset('a');
+  assert.equal(view.inputs.get('a').value, 'deepseek');
+  assert.equal(view.hasInputs.get('a').value, 'vision, implicit-caching');
+  await view.advance(650);
+  assert.equal(view.calls.length, 1);
+  assert.deepEqual(view.server.models[0], {
+    ...view.initial[0], providers: ['deepseek'], has: ['vision', 'implicit-caching'],
+  });
+  assert.deepEqual(view.server.models.slice(1), view.initial.slice(1));
+  await view.editHas('a', '');
+  await view.advance(650);
+  assert.equal(view.calls.length, 2);
+  assert.deepEqual(view.server.models[0].has, []);
+  assert.deepEqual(view.server.models[0].providers, ['deepseek']);
+  assert.deepEqual(view.server.models.slice(1), view.initial.slice(1));
   assert.equal(view.nodes.get('pinModelsState').dataset.phase, 'saved');
 });
 

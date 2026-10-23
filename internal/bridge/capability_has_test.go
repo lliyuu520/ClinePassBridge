@@ -5,10 +5,9 @@ import (
 	"testing"
 )
 
-// The capability filter (`has`) is what actually moves a Cline Pass request off
-// the private relay: the routing allow-list (`only`) is a hint the account may
-// be unable to honour. These tests pin the merge rules so a future refactor
-// cannot silently drop the field.
+// Capability filters (`has`) and provider allow-lists (`only`) constrain
+// different parts of gateway routing. Keep their merge rules independent so
+// neither field is silently dropped.
 
 func TestConfiguredHasIsInjected(t *testing.T) {
 	s, err := registerService(t, modelConfig(t, "    has:\n      - vision\n      - implicit-caching\n"))

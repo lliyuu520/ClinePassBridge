@@ -432,7 +432,7 @@ func TestReasoningMappingProviderProbeOutbound(t *testing.T) {
 			if enabled {
 				want, mapping = "xhigh", &ReasoningMappingLog{"unset", "xhigh"}
 			}
-			if present != enabled || str(value) != want || body["stream"] != true || number(body["max_tokens"]) != 16 || body["providerOptions"] != nil {
+			if present != enabled || str(value) != want || body["stream"] != true || number(body["max_tokens"]) != 64 || body["providerOptions"] != nil {
 				t.Errorf("provider outbound body = %s", jsonBytes(body))
 			}
 			entry := s.logs[0]

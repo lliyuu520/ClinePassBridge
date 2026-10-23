@@ -86,9 +86,8 @@ func (s *Service) applyProviderRouting(j map[string]any, alias string) {
 	}
 	// Capability filters follow the same rule: a caller that already sent one
 	// keeps control, and the configured list only backfills an absent field.
-	// Never copied into the legacy top-level form below — Cline reads
-	// capabilities from providerOptions.gateway only, and that form is a
-	// routing hint, not a filter.
+	// Capabilities belong only in providerOptions.gateway, so the top-level
+	// provider form below continues to mirror only the provider allow-list/order.
 	if _, ok := gateway["has"]; !ok {
 		if has := cfg.pinnedHas(alias); len(has) > 0 {
 			gateway["has"] = has

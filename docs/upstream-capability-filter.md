@@ -1,19 +1,23 @@
 # 上游能力过滤（has）
 
-Cline 的上游路由接受两个限制字段，行为差别很大：
+想让 `cline-pass/deepseek-v4.1-flash-1017` 请求由 DeepSeek 提供，可以同时配置：
 
-- `only`：允许列表。告诉网关「优先在这些 provider 里选」，是**提示**。
-- `has`：能力过滤。要求服务该模型的上游具备指定能力，是**硬条件**。
+- `only: ["deepseek"]`：提供方允许列表，限定公开候选路由中的 provider。
+- `has: ["vision", "implicit-caching"]`：要求候选满足这些能力标签。
 
-被钉在 `openai_compatible_private` 私有通道的账号，往往只对 `has` 有反应：`only` 写了也不会被采纳，请求照旧走私有通道；补上 `has` 之后，不满足能力条件的私有通道会被排除，请求回落到真实 provider。
+两者作用不同。2026-10-23 的单账号实测中，仅 `only` 仍落私有通道，仅 `has` 则落到 `fireworks`；组合使用才得到 `finalProvider=deepseek`。因此，指定 DeepSeek 时应一起设置，能力过滤本身不指定提供方。
 
-本插件把这两个字段都放在「钉上游」页按模型配置，二者互不替代。经验做法是：`only` 留空或只写一家当兜底，真正驱动路由的是 `has`。
+## 在插件中设置
 
----
+在「钉上游」页，确认模型的上游 ID 为 `cline-pass/deepseek-v4.1-flash-1017`，点击「应用 DeepSeek 预设」填入提供方和能力组合。界面会自动保存，看到「已保存」后再探测或测试。两项都保留自由编辑；预设不会自动修改旧模型的上游 ID，也不会自动改写其他模型。
+
+能力过滤没有默认值，升级不会给已有模型自动补上 `has`。详细配置和客户端优先级见[进阶配置](configuration.md#能力过滤has)。
+
+「探测可钉上游」按已保存的能力条件发起小请求，同时移除提供方允许列表、顺序等其他路由选项，读取符合这些能力条件的候选。候选为空只表示上游没有列出候选；最终保存的组合是否命中 DeepSeek，请通过「测试模型」或正式请求的「实际上游」确认。
 
 ## 请求形态
 
-字段位于请求体顶层的 `providerOptions.gateway`，与 `model`、`messages` 平级：
+`has` 写在请求体顶层的 `providerOptions.gateway` 中：
 
 ```json
 {
@@ -29,66 +33,70 @@ Cline 的上游路由接受两个限制字段，行为差别很大：
 }
 ```
 
-常见能力标识：
-
-| 标识 | 含义 |
+| 能力标签 | 含义 |
 | --- | --- |
-| `vision` | 上游支持图片输入 |
-| `implicit-caching` | 上游支持自动前缀缓存 |
+| `vision` | 网关标记的图片输入能力 |
+| `implicit-caching` | 网关标记的自动前缀缓存能力 |
 
-这两项与模型是否真的会用到无关，只是路由筛子。挑上游不提供的组合会直接导致没有可用 provider。
+标签用于候选匹配；这次文本请求实验没有验证图片输入或缓存效果。插件不校验上游是否支持某个标签，拼写或组合不匹配可能导致没有可用候选。
 
-旧的顶层 `provider` 形态（`{"provider": {"only": [...]}}`）只被当作路由提示，不参与能力匹配。实测账号被锁在私有通道时，这种写法反而会把请求钉死在私有通道，所以插件不往那里写 `has`。
+插件把最终的 `only/order` 同时写入顶层 `provider` 和 `providerOptions.gateway`，兼容不同路由路径；`has` 只写入 `providerOptions.gateway`。下面 G 组验证了这种双字段形态可以与能力组合共同使用。
 
----
+## 七组实测：2026-10-23
 
-## 为什么只用 `only` 常常无效
+北京时间 22:16–22:19，使用同一账号、同一网络路径，直接请求 Cline `/api/v1/chat/completions`。全部为同一句短文本，`stream=true`、`stream_options.include_usage=true`、`max_tokens=64`，顺序执行且没有自动重试。表中的模型均带 `cline-pass/` 前缀。
 
-同一把 key、同一个 Pass 模型，直连 `https://api.cline.bot/api/v1/chat/completions` 的对照结果（2026-10）：
+| 组 | 上游模型 | `gateway` 参数 | `finalProvider` | 用时 |
+| --- | --- | --- | --- | --- |
+| A | `deepseek-v4.1-flash-1017` | 无 | `openai-compatible-private` | 2.290s |
+| B | 同 A | 仅 `only=[deepseek]` | `openai-compatible-private` | 7.145s |
+| C | 同 A | 仅 `has=[vision,implicit-caching]` | `fireworks` | 2.263s |
+| D | 同 A | `only + has` | `deepseek` | 2.189s |
+| E | 同 A | 重复 D | `deepseek` | 2.021s |
+| F | `deepseek-v4.1-flash`（无后缀） | `only + has` | `openai-compatible-private` | 1.654s |
+| G | 同 A | `only + order + has`，顶层 `provider` 同步写 `only/order` | `deepseek` | 1.819s |
 
-| 请求 | 路由结果（`choices[0].delta.provider_metadata.gateway.routing.finalProvider`） | 上游尝试次数 |
-| --- | --- | --- |
-| `deepseek-v4.1-flash` + `only:[deepseek]` + `has:[vision, implicit-caching]` | `openai-compatible-private` | 1 |
-| `deepseek-v4.1-flash-1017` + `only:[deepseek]` + `has:[vision, implicit-caching]` | `deepseek` | 2 |
-| `deepseek-v4.1-flash-1017` + 只有 `has` | `deepseek` | 2 |
-| `deepseek-v4.1-flash-1017` + `has` + `only:[not-a-real-provider]` | 无可用 provider，SSE 里报 `stream_initialization_failed` | — |
-| `deepseek-v4.1-flash-1017` + 顶层 `provider:{only:[deepseek]}` | `openai-compatible-private` | 1 |
+七组均 HTTP 200、SSE 含 `[DONE]`、`finish_reason=stop`，没有 SSE JSON 解析错误。G 是按插件请求构造方式直连上游的对照，不等于已部署插件的端到端验证。
 
-读法：
+这组结果支持在该账号和时段使用 `-1017` 模型的组合参数；无后缀模型当时仍落私有通道。它不代表所有账号、其他模型或后续时段的路由都会相同，也没有验证非流式行为。
 
-1. **只有 `has` 起作用。** 第二行与第三行结果一致，说明 `only` 不是必要条件；第一行说明换模型 ID 后两个字段一起失效，字段本身没问题。
-2. **模型 ID 决定可行性。** `deepseek-v4.1-flash` 只解析到私有通道那条路，`deepseek-v4.1-flash-1017` 才同时具备私有通道与真实 provider 两个候选。要钉上游就用 1017 这类的 ID。
-3. **`has` 不是过滤掉候选，而是先试后排除。** 尝试次数 2 说明网关先试了私有通道、判定不满足能力条件，再切到真实 provider。
-4. **失败发生在流里。** `only` 指向不存在的 provider 时，HTTP 状态仍是 200，错误写在 SSE 数据里，只判状态码会漏掉。
+## 如何读路由结果
 
-已有的排查记录见管理页「钉上游」页右上角的「详细证据」。
+最终提供方看响应的 `provider_metadata.gateway.routing.finalProvider`；本轮流式字段位于 `choices[0].delta` 下，插件在日志中显示为「实际上游」。
 
----
+- C 组的 `canonicalSlug` 已是 `deepseek/deepseek-v4.1-flash-1017`，但 `finalProvider=fireworks`。模型名中的 DeepSeek 不等于最终提供方是 DeepSeek。
+- D/E/G 的规划摘要包含 `Provider set restricted to: deepseek`，最终提供方也都是 `deepseek`。这条公开候选路由会应用 `only` 的提供方限制。
+- C/D/E/G 的 `modelAttemptCount=2`，但私有模型条目为 `success=false`、`providerAttemptCount=0`、`providerAttempts=[]`；公开模型只有一次提供方尝试。两个模型条目不等于向两家供应商各发送了一次请求。
+- `affinity.outcome` 在成功组间也不同。本功能限制单次请求的路由，不代表永久绑定账号或会话。
 
-## 两个后果要知道
+元数据支持“能力条件改变了候选路由，提供方列表进一步限制选择”的解释；网关内部过滤与规划的具体顺序仍属于推断。
 
-**计费。** 私有通道的账单记 `creditsUsed: 0`，真实 provider 会产生费用（一次极小的请求约 `0.0000133`）。配置 `has` 之前先确认这些流量本来就该按真实用量计费。
+## 费用和失败
 
-**失败方式。** `has` 与一个过窄的 `only` 叠加时，如果没有可用 provider，请求会直接失败而不是降级。只想要「尽量别走私有通道」的话，`only` 留空、只配 `has` 更稳。
+`cost`、`gatewayCost`、`marketCost`、`inferenceCost` 等是上游返回的费用字段。本轮没有核对账户账单或额度扣减，单凭这些字段不足以认定私有通道免费、公开提供方一定另行收费，或两条通道单价相同。
 
----
+能力条件与提供方允许列表叠加后，候选过窄可能导致请求失败。测试时也要看 SSE 错误和实际提供方，HTTP 200 本身不代表请求已正常完成。
 
 ## 客户端直接传字段
 
-插件不是唯一的入口：能够完整透传请求体的客户端，自己带 `providerOptions` 也能生效，不需要依赖插件配置。OpenAI Python SDK 用 `extra_body` 传，字段照样落在请求体顶层：
+客户端能够传递扩展请求体时，也可以直接设置这组参数。经插件调用时先选择「客户端优先」；默认的「插件配置优先」会使用模型配置中的路由条件。
+
+例如 OpenAI Python SDK 的扩展字段写法：
 
 ```python
 client.chat.completions.create(
-    model="cline-pass/deepseek-v4.1-flash-1017",
+    model="deepseek-v4.1-flash-1017",  # 填插件中已配置的客户端模型名称
     messages=[{"role": "user", "content": "只回复 OK"}],
-    extra_body={"providerOptions": {"gateway": {"has": ["vision", "implicit-caching"]}}},
+    stream=True,
+    extra_body={
+        "providerOptions": {
+            "gateway": {
+                "only": ["deepseek"],
+                "has": ["vision", "implicit-caching"],
+            }
+        }
+    },
 )
 ```
 
-客户端已带 `has` 时，插件在「客户端优先」策略下不会再覆盖它。
-
----
-
-## 能力标识从哪来
-
-插件目前不猜能力：`has` 由使用者填写，取值不做白名单校验，只做格式归一化（小写、去重、最多 8 个）。写错拼写不会报错，只会让请求没有匹配的上游——所以改完先发一次测试请求，看请求日志的「实际上游」列从 `openai-compatible-private` 变成真实 provider 名称，才算配置成功。「测试模型」按钮会用当前凭据发一次真实请求并显示实际上游。
+「客户端优先」按字段保留客户端值，缺少的字段才用插件配置补齐；客户端显式发送 `has: []` 也会保留。
