@@ -28,6 +28,9 @@ const (
 // stay reviewable in the UI.
 const maxModelProviders = 8
 
+// Capability filters are also UI-editable slugs, so they get the same bound.
+const maxModelHas = 8
+
 // localBackoffLabel is the label the UI shows, and filters by, for a request the
 // plugin suppressed locally. Such a request never reached an upstream, so it has
 // no provider of its own.
@@ -130,6 +133,10 @@ type Model struct {
 	ID               string                  `json:"id" yaml:"id"`
 	UpstreamID       string                  `json:"upstream_id" yaml:"upstream_id"`
 	Providers        []string                `json:"providers" yaml:"providers"`
+	// Has is the gateway capability filter (e.g. vision, implicit-caching).
+	// It is filled in only when the caller sent none, so a client that knows
+	// better keeps control unless ProviderPolicy is "config".
+	Has []string `json:"has" yaml:"has"`
 }
 type Config struct {
 	ReasoningMapping         *ReasoningMappingConfig `json:"reasoning_mapping,omitempty" yaml:"reasoning_mapping,omitempty"` // Legacy global mapping; migrated during validation.
@@ -253,6 +260,24 @@ func (c *Config) validate() error {
 			pinned[slug] = true
 			m.Providers[n] = slug
 		}
+		// A nil Has stays nil: unlike Providers there is no fresh-install
+		// default, because a capability filter the operator never asked for
+		// would silently re-route requests.
+		if len(m.Has) > maxModelHas {
+			return fail(400, "a model can filter on at most 8 capabilities")
+		}
+		caps := map[string]bool{}
+		for n, raw := range m.Has {
+			slug := strings.ToLower(strings.TrimSpace(raw))
+			if slug == "" || strings.ContainsAny(slug, " \r\n	") {
+				return fail(400, "capability filters must be nonempty slugs without whitespace")
+			}
+			if caps[slug] {
+				return fail(400, "capability filters must be unique within a model")
+			}
+			caps[slug] = true
+			m.Has[n] = slug
+		}
 	}
 	for i := range c.ServerTools {
 		if err := c.ServerTools[i].validate(); err != nil {
@@ -278,6 +303,17 @@ func (c Config) pinnedProviders(alias string) []string {
 	for _, m := range c.Models {
 		if m.ID == alias {
 			return append([]string{}, m.Providers...)
+		}
+	}
+	return nil
+}
+
+// pinnedHas returns the configured gateway capability filter for a
+// client-facing model alias.
+func (c Config) pinnedHas(alias string) []string {
+	for _, m := range c.Models {
+		if m.ID == alias {
+			return append([]string{}, m.Has...)
 		}
 	}
 	return nil

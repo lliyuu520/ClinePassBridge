@@ -84,6 +84,16 @@ func (s *Service) applyProviderRouting(j map[string]any, alias string) {
 	if _, ok := gateway["order"]; !ok && len(pinned) > 0 {
 		gateway["order"] = pinned
 	}
+	// Capability filters follow the same rule: a caller that already sent one
+	// keeps control, and the configured list only backfills an absent field.
+	// Never copied into the legacy top-level form below — Cline reads
+	// capabilities from providerOptions.gateway only, and that form is a
+	// routing hint, not a filter.
+	if _, ok := gateway["has"]; !ok {
+		if has := cfg.pinnedHas(alias); len(has) > 0 {
+			gateway["has"] = has
+		}
+	}
 	// Other provider namespaces in providerOptions must survive, but the
 	// gateway sub-key is owned by this function from here on.
 	opts := object(j["providerOptions"])

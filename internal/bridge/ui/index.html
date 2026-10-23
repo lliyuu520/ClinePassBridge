@@ -621,7 +621,7 @@
     </section>
 
     <section id="pinPanel" role="tabpanel" aria-labelledby="pinTab" hidden>
-      <div class="notice with-action" role="note"><span>⚠️ 能否钉住上游是玄学问题，开发者于 10.3 测试表明：不同账号有的能钉上游，有的不能。而且风控策略会随时间变化。同时，目前只验证了 deepseek-v4.1-flash 模型可以钉上游。</span><button class="button compact" id="openPinEvidence" type="button" data-icon="book">详细证据</button></div>
+      <div class="notice with-action" role="note"><span>⚠️ 能否钉住上游是玄学问题，开发者于 10.3 测试表明：不同账号有的能钉上游，有的不能。而且风控策略会随时间变化。允许列表（only）只是提示；被钉在私有通道的账号改用能力过滤（has）更可靠，2026-10 实测 deepseek-v4.1-flash-1017 在私有通道账号上可从 openai-compatible-private 挤出到 deepseek。</span><button class="button compact" id="openPinEvidence" type="button" data-icon="book">详细证据</button></div>
       <div class="panel">
         <div class="panel-head"><div><h2>上游策略</h2><p class="panel-hint">选择插件配置与客户端参数的优先级。</p></div><div class="pin-save-feedback"><span class="pin-save-status" id="providerPolicyState" role="status" aria-live="polite">自动保存</span><button class="button compact" id="retryProviderPolicy" type="button" data-icon="refresh" hidden>重试</button></div></div>
         <form class="pin-policy-layout" id="providerPolicyForm">
@@ -630,11 +630,12 @@
         </form>
       </div>
       <div class="panel">
-        <div class="panel-head"><div><h2>模型上游白名单</h2><p class="panel-hint" id="pinInputHint">为每个模型设置允许使用的上游，以逗号或空格分隔，也可点击探测结果追加。</p></div><div class="pin-save-feedback"><span class="pin-save-status" id="pinModelsState" role="status" aria-live="polite">自动保存</span><button class="button compact" id="retryPinModels" type="button" data-icon="refresh" hidden>重试</button></div></div>
+        <div class="panel-head"><div><h2>模型上游白名单</h2><p class="panel-hint" id="pinInputHint">为每个模型设置允许使用的上游和能力过滤，以逗号或空格分隔，也可点击探测结果追加。</p></div><div class="pin-save-feedback"><span class="pin-save-status" id="pinModelsState" role="status" aria-live="polite">自动保存</span><button class="button compact" id="retryPinModels" type="button" data-icon="refresh" hidden>重试</button></div></div>
         <dl class="pin-semantics" id="pinSemantics">
           <div><dt>留空 · 自动路由</dt><dd>由网关自动选择上游。</dd></div>
           <div><dt>一个上游 · 固定使用</dt><dd>只使用该上游；上游满容量时请求会失败。</dd></div>
           <div><dt>多个上游 · 白名单</dt><dd>在白名单内自动回退，列出顺序仅为提示。</dd></div>
+          <div><dt>能力过滤 · 排除不满足的上游</dt><dd id="pinHasHint">要求上游具备指定能力，常见的比如 <code>vision</code>、<code>implicit-caching</code>。允许列表只是提示，账号被钉在私有通道时未必生效；能力过滤是硬条件，能把不满足的上游排除掉。留空表示不限制，客户端已带该字段时以客户端为准（策略为「插件配置优先」时例外）。</dd></div>
         </dl>
         <div class="pin-probe-tools">
           <div class="field-line">
@@ -968,7 +969,7 @@
     let reasoningMappingBusy = false;
     let reasoningMappingRevision = 0;
     const reasoningDrafts = new Map();
-    const pinAutosave = { drafts: new Map(), timer: 0, flight: null };
+    const pinAutosave = { drafts: new Map(), hasDrafts: new Map(), timer: 0, flight: null };
     const policyAutosave = { desired: null, flight: null };
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
     const buttonIcons = {
@@ -1620,7 +1621,7 @@
       await loadStatus();
     }
     const modelKey = (model) => JSON.stringify([model.id, model.upstream_id]);
-    const modelTestKey = (model, credential = $('modelTestCredential').value, reasoning = $('modelTestReasoning').value) => JSON.stringify([model.id, model.upstream_id, credential, reasoning, model.providers, state.config?.provider_policy, model.reasoning_mapping, reasoningMappingRevision]);
+    const modelTestKey = (model, credential = $('modelTestCredential').value, reasoning = $('modelTestReasoning').value) => JSON.stringify([model.id, model.upstream_id, credential, reasoning, model.providers, model.has ?? [], state.config?.provider_policy, model.reasoning_mapping, reasoningMappingRevision]);
     function modelTestHTML(test) {
       if (!test) return '';
       if (test.pending) return '<div class="model-test-result"><span class="subtext" role="status">正在连接 Cline，等待完整响应…</span></div>';
@@ -1655,6 +1656,9 @@
       }
     }
     const parseProviders = (value) => [...new Set(value.split(/[,\s]+/).filter(Boolean).map((provider) => provider.toLowerCase()))];
+    // Capability slugs go through the same split, plus the server-side rules
+    // (lowercase, no duplicates) so an edit round-trips unchanged.
+    const parseHas = (value) => [...new Set(value.split(/[,\s]+/).filter(Boolean).map((capability) => capability.toLowerCase()))];
     function pinSaveState(id, message, phase = 'idle') {
       $(id).textContent = message;
       $(id).dataset.phase = phase;
@@ -1688,19 +1692,35 @@
       finally { policyAutosave.flight = null; }
     }
     function syncPinDraftRows() {
-      for (const input of $('pinModelList').querySelectorAll('input[data-model-key]')) {
-        const model = state.models.find((item) => modelKey(item) === input.dataset.modelKey);
+      const inputs = [
+        ...$('pinModelList').querySelectorAll('input[data-model-key]'),
+        ...$('pinModelList').querySelectorAll('input[data-has-key]'),
+      ];
+      for (const input of inputs) {
+        const capability = input.dataset.hasKey !== undefined;
+        const key = capability ? input.dataset.hasKey : input.dataset.modelKey;
+        const model = state.models.find((item) => modelKey(item) === key);
         if (!model) continue;
-        const draft = pinAutosave.drafts.get(modelKey(model));
-        const providers = draft === undefined ? model.providers : parseProviders(draft);
-        if (draft === undefined && input !== document.activeElement) input.value = model.providers.join(', ');
+        const drafts = capability ? pinAutosave.hasDrafts : pinAutosave.drafts;
+        const draft = drafts.get(key);
+        const current = capability ? model.has || [] : model.providers;
+        const values = draft === undefined ? current : capability ? parseHas(draft) : parseProviders(draft);
+        if (draft === undefined && input !== document.activeElement) input.value = values.join(', ');
+        if (capability) {
+          const badge = input.closest('.model-row').querySelector('.pin-has-badge');
+          badge.textContent = values.length ? `能力：${values.join(', ')}` : '未设置能力过滤';
+          badge.classList.toggle('good', values.length > 0);
+          continue;
+        }
         const badge = input.closest('.model-row').querySelector('.pin-routing-badge');
-        badge.textContent = providers.length > 1 ? '白名单' : providers.length ? '已固定' : '自动路由';
-        badge.classList.toggle('good', providers.length > 0);
+        badge.textContent = values.length > 1 ? '白名单' : values.length ? '已固定' : '自动路由';
+        badge.classList.toggle('good', values.length > 0);
       }
     }
     function queuePinSave(input, immediate = false) {
-      pinAutosave.drafts.set(input.dataset.modelKey, input.value);
+      const capability = input.dataset.hasKey !== undefined;
+      const key = capability ? input.dataset.hasKey : input.dataset.modelKey;
+      (capability ? pinAutosave.hasDrafts : pinAutosave.drafts).set(key, input.value);
       clearTimeout(pinAutosave.timer);
       if (!pinAutosave.flight) pinSaveState('pinModelsState', '待保存…', 'pending');
       syncPinDraftRows();
@@ -1711,7 +1731,7 @@
       clearTimeout(pinAutosave.timer);
       pinAutosave.timer = 0;
       if (pinAutosave.flight) return pinAutosave.flight;
-      if (!pinAutosave.drafts.size) return true;
+      if (!pinAutosave.drafts.size && !pinAutosave.hasDrafts.size) return true;
       if (state.modelBusy || state.fetchingModels || state.candidateBusy || reasoningMappingBusy) {
         pinAutosave.timer = setTimeout(flushPinModels, 200);
         return false;
@@ -1719,10 +1739,19 @@
       state.modelBusy = true;
       pinAutosave.flight = (async () => {
         try {
-          while (pinAutosave.drafts.size) {
+          while (pinAutosave.drafts.size || pinAutosave.hasDrafts.size) {
             const edits = new Map(pinAutosave.drafts);
-            const next = state.models.map((model) => ({ ...model, providers: edits.has(modelKey(model)) ? parseProviders(edits.get(modelKey(model))) : [...model.providers] }));
-            const changed = next.some((model, index) => JSON.stringify(model.providers) !== JSON.stringify(state.models[index].providers));
+            const hasEdits = new Map(pinAutosave.hasDrafts);
+            // `has` is only sent when the operator edited it or the model already
+            // carries one, so untouched models keep their stored shape.
+            const next = state.models.map((model) => {
+              const key = modelKey(model);
+              const entry = { ...model, providers: edits.has(key) ? parseProviders(edits.get(key)) : [...model.providers] };
+              if (hasEdits.has(key)) entry.has = parseHas(hasEdits.get(key));
+              return entry;
+            });
+            const changed = next.some((model, index) => JSON.stringify(model.providers) !== JSON.stringify(state.models[index].providers)
+              || JSON.stringify(model.has ?? []) !== JSON.stringify(state.models[index].has ?? []));
             pinSaveState('pinModelsState', '正在保存…', 'saving');
             let saved = { models: next };
             if (changed) {
@@ -1735,6 +1764,12 @@
               const model = saved.models.find((item) => modelKey(item) === key);
               if (model && JSON.stringify(model.providers || []) !== JSON.stringify(parseProviders(value))) throw new Error('服务端返回的白名单与本次修改不一致，请重试');
               pinAutosave.drafts.delete(key);
+            }
+            for (const [key, value] of hasEdits) {
+              if (pinAutosave.hasDrafts.get(key) !== value) continue;
+              const model = saved.models.find((item) => modelKey(item) === key);
+              if (model && JSON.stringify(model.has || []) !== JSON.stringify(parseHas(value))) throw new Error('服务端返回的能力过滤与本次修改不一致，请重试');
+              pinAutosave.hasDrafts.delete(key);
             }
             renderModels(saved, false);
           }
@@ -1782,7 +1817,9 @@
       $('pinModelList').innerHTML = state.models.length ? state.models.map((model, index) => {
         const value = pinAutosave.drafts.get(modelKey(model)) ?? model.providers.join(', ');
         const providers = parseProviders(value);
-        return `<div class="model-row"><div class="model-main"><div class="primary-text mono">${shown(model.id)}</div><div class="subtext mono">→ ${shown(model.upstream_id)}</div></div><span class="badge pin-routing-badge ${providers.length ? 'good' : ''}">${providers.length > 1 ? '白名单' : providers.length ? '已固定' : '自动路由'}</span><div class="row-actions"><button class="button compact probe-providers" type="button" data-model="${esc(model.id)}" aria-label="${esc(`探测 ${model.id} 可钉上游`)}" aria-controls="pinProbeResult-${esc(index)}">${buttonIcon('search')}探测可钉上游</button><button class="button compact pin-test-model" type="button" data-index="${index}" aria-label="${esc(`测试 ${model.id}`)}" aria-controls="pinModelTest-${index}" title="使用当前所选凭据测试模型，测试前会先完成自动保存">${buttonIcon('test')}测试模型</button></div><div class="field pin-editor"><label for="pinProviders-${esc(index)}">允许的上游</label><input class="control mono" id="pinProviders-${esc(index)}" data-index="${esc(index)}" data-model-key="${esc(modelKey(model))}" value="${esc(value)}" autocomplete="off" spellcheck="false" aria-describedby="pinInputHint pinSemantics"><div id="pinProbeResult-${esc(index)}" role="status" aria-live="polite">${providerProbeHTML(model)}</div></div><div class="pin-model-test" id="pinModelTest-${index}" role="status" aria-live="polite"></div></div>`;
+        const hasValue = pinAutosave.hasDrafts.get(modelKey(model)) ?? (model.has || []).join(', ');
+        const capabilities = parseHas(hasValue);
+        return `<div class="model-row"><div class="model-main"><div class="primary-text mono">${shown(model.id)}</div><div class="subtext mono">→ ${shown(model.upstream_id)}</div></div><span class="badge pin-routing-badge ${providers.length ? 'good' : ''}">${providers.length > 1 ? '白名单' : providers.length ? '已固定' : '自动路由'}</span><div class="row-actions"><button class="button compact probe-providers" type="button" data-model="${esc(model.id)}" aria-label="${esc(`探测 ${model.id} 可钉上游`)}" aria-controls="pinProbeResult-${esc(index)}">${buttonIcon('search')}探测可钉上游</button><button class="button compact pin-test-model" type="button" data-index="${index}" aria-label="${esc(`测试 ${model.id}`)}" aria-controls="pinModelTest-${index}" title="使用当前所选凭据测试模型，测试前会先完成自动保存">${buttonIcon('test')}测试模型</button></div><div class="field pin-editor"><label for="pinProviders-${esc(index)}">允许的上游</label><input class="control mono" id="pinProviders-${esc(index)}" data-index="${esc(index)}" data-model-key="${esc(modelKey(model))}" value="${esc(value)}" autocomplete="off" spellcheck="false" aria-describedby="pinInputHint pinSemantics"><div id="pinProbeResult-${esc(index)}" role="status" aria-live="polite">${providerProbeHTML(model)}</div></div><div class="field pin-editor"><label for="pinHas-${esc(index)}">能力过滤（可选）</label><input class="control mono" id="pinHas-${esc(index)}" data-index="${esc(index)}" data-has-key="${esc(modelKey(model))}" value="${esc(hasValue)}" placeholder="如 vision, implicit-caching" autocomplete="off" spellcheck="false" aria-describedby="pinHasHint pinSemantics"><div class="subtext pin-has-badge ${capabilities.length ? 'good' : ''}" id="pinHasBadge-${esc(index)}">${capabilities.length ? `能力：${esc(capabilities.join(', '))}` : '未设置能力过滤'}</div></div><div class="pin-model-test" id="pinModelTest-${index}" role="status" aria-live="polite"></div></div>`;
       }).join('') : '<div class="empty"><strong>暂无模型映射</strong>请前往模型映射标签添加模型。</div>';
       syncProviderProbeControls();
       syncPinModelTests();
@@ -1853,24 +1890,25 @@
       }
       const chip = event.target.closest('.provider-chip');
       if (!chip || (state.modelBusy && !pinAutosave.flight)) return;
-      const input = chip.closest('.pin-editor').querySelector('input');
+      const input = chip.closest('.pin-editor').querySelector('input[data-model-key]');
       input.value = parseProviders(`${input.value}, ${chip.dataset.provider}`).join(', ');
       input.focus();
       queuePinSave(input, true);
     });
     $('pinModelList').addEventListener('input', (event) => {
-      if (!event.target.matches('input[data-model-key]')) return;
+      if (!event.target.matches('input[data-model-key]') && !event.target.matches('input[data-has-key]')) return;
       if (event.isComposing) {
         clearTimeout(pinAutosave.timer);
-        pinAutosave.drafts.set(event.target.dataset.modelKey, event.target.value);
+        const capability = event.target.dataset.hasKey !== undefined;
+        (capability ? pinAutosave.hasDrafts : pinAutosave.drafts).set(capability ? event.target.dataset.hasKey : event.target.dataset.modelKey, event.target.value);
         pinSaveState('pinModelsState', '待保存…', 'pending');
       } else queuePinSave(event.target);
     });
     $('pinModelList').addEventListener('compositionend', (event) => {
-      if (event.target.matches('input[data-model-key]')) queuePinSave(event.target);
+      if (event.target.matches('input[data-model-key]') || event.target.matches('input[data-has-key]')) queuePinSave(event.target);
     });
     $('pinModelList').addEventListener('focusout', (event) => {
-      if (event.target.matches('input[data-model-key]')) queuePinSave(event.target, true);
+      if (event.target.matches('input[data-model-key]') || event.target.matches('input[data-has-key]')) queuePinSave(event.target, true);
     });
     $('pinModelsForm').addEventListener('submit', (event) => {
       event.preventDefault();
