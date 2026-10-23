@@ -21,6 +21,7 @@ func TestConfigMaxResponseBytesDefaultsAndPartialUpdate(t *testing.T) {
 		{name: "new-install", want: 64 << 20},
 		{name: "missing-field", settings: `{"timeout_seconds":120}`, want: 64 << 20},
 		{name: "saved-16-MiB", settings: `{"timeout_seconds":120,"max_response_bytes":16777216}`, want: 16 << 20},
+		{name: "saved-capability-filter", settings: `{"timeout_seconds":120,"models":[{"id":"model","upstream_id":"cline-pass/model","has":["vision","implicit-caching"]}]}`, want: 64 << 20},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -114,28 +115,37 @@ func TestConfigFidelityRejectedPUTPreservesStateAndDisk(t *testing.T) {
 	}
 }
 
-func TestConfigFidelityCopyPreservesProviderShapeAndIsolation(t *testing.T) {
+func TestConfigFidelityCopyPreservesRoutingShapeAndIsolation(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		providers []string
+		has       []string
 	}{
-		{name: "nil", providers: nil},
-		{name: "explicit-empty", providers: []string{}},
-		{name: "populated", providers: []string{"deepseek", "wafer"}},
+		{name: "nil", providers: nil, has: nil},
+		{name: "explicit-empty", providers: []string{}, has: []string{}},
+		{name: "populated", providers: []string{"deepseek", "wafer"}, has: []string{"vision", "implicit-caching"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewService()
-			s.cfg.Models = []Model{{ID: "model", UpstreamID: "cline-pass/model", Providers: tc.providers}}
+			s.cfg.Models = []Model{{ID: "model", UpstreamID: "cline-pass/model", Providers: tc.providers, Has: tc.has}}
 			before := jsonBytes(s.config())
 			copied := s.config()
 			if !reflect.DeepEqual(copied.Models[0].Providers, tc.providers) {
 				t.Error("config copy changed nil, empty or populated provider semantics")
+			}
+			if !reflect.DeepEqual(copied.Models[0].Has, tc.has) {
+				t.Error("config copy changed nil, empty or populated capability filter semantics")
 			}
 			copied.Models[0].ID = "edited-copy"
 			if len(copied.Models[0].Providers) > 0 {
 				copied.Models[0].Providers[0] = "novita"
 			} else {
 				copied.Models[0].Providers = append(copied.Models[0].Providers, "novita")
+			}
+			if len(copied.Models[0].Has) > 0 {
+				copied.Models[0].Has[0] = "prompt-caching"
+			} else {
+				copied.Models[0].Has = append(copied.Models[0].Has, "prompt-caching")
 			}
 			if !bytes.Equal(before, jsonBytes(s.config())) {
 				t.Error("editing a config copy changed the service configuration")

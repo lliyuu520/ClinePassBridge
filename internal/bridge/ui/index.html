@@ -1621,7 +1621,7 @@
       await loadStatus();
     }
     const modelKey = (model) => JSON.stringify([model.id, model.upstream_id]);
-    const modelTestKey = (model, credential = $('modelTestCredential').value, reasoning = $('modelTestReasoning').value) => JSON.stringify([model.id, model.upstream_id, credential, reasoning, model.providers, state.config?.provider_policy, model.reasoning_mapping, reasoningMappingRevision]);
+    const modelTestKey = (model, credential = $('modelTestCredential').value, reasoning = $('modelTestReasoning').value) => JSON.stringify([model.id, model.upstream_id, credential, reasoning, model.providers, model.has ?? [], state.config?.provider_policy, model.reasoning_mapping, reasoningMappingRevision]);
     function modelTestHTML(test) {
       if (!test) return '';
       if (test.pending) return '<div class="model-test-result"><span class="subtext" role="status">正在连接 Cline，等待完整响应…</span></div>';
