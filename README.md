@@ -38,7 +38,9 @@ plugins:
 3. 进入「模型映射」，点击「添加模型 → 获取上游模型」，勾选要用的模型。
 4. 在客户端填入 **CPA 的 API 地址和 CPA 的客户端 API key**，选择刚添加的模型即可。
 
-首次安装已默认添加 `deepseek-v4.1-flash-1017` → `cline-pass/deepseek-v4.1-flash-1017` 映射，提供方默认填入 `deepseek`，能力条件默认留空。需要指定 DeepSeek 时，在「钉上游」页点击「应用 DeepSeek 预设」，看到「已保存」后再测试；预设会一起填入 `only=[deepseek]` 和 `has=[vision,implicit-caching]`。其他模型按第 3 步添加，导入时客户端模型名默认去掉 `cline-pass/` 前缀。升级保留已有映射，老用户使用 1017 模型时需自行添加映射。
+首次安装已默认添加 `deepseek-v4.1-flash-1017` → `cline-pass/deepseek-v4.1-flash-1017` 映射，提供方默认填入 `deepseek`，能力默认使用 `vision,implicit-caching`。两项都可在「钉上游」页修改；清空后也可用「应用 DeepSeek 预设」恢复组合，看到「已保存」后再测试。
+
+升级时，已有 1017 映射的 `has` 缺失或为 `null` 会补入上述默认能力，已有提供方列表和自定义能力保持原值；显式保存 `has: []` 可退出能力过滤，其他上游模型不补能力默认值。实际命中的提供方仍以日志为准。其他模型按第 3 步添加，导入时客户端模型名默认去掉 `cline-pass/` 前缀；旧映射不会自动换成 1017，需自行添加。
 
 管理页会尝试复用 CPA / CPAMP 的登录信息。如果提示输入密钥，直连 CPA 时填 CPA 管理密钥，经 CPAMP 完整模式访问时填面板管理密钥。
 

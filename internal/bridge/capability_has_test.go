@@ -51,9 +51,9 @@ func TestClientHasIsDroppedUnderConfigPolicy(t *testing.T) {
 }
 
 func TestClearedHasLeavesNoProviderOptions(t *testing.T) {
-	// An explicit empty list means the operator cleared the filter; it must not
-	// be re-seeded the way the provider allow-list is.
-	s, err := registerService(t, modelConfig(t, "    has: []\n"))
+	// An explicit empty list overrides even the 1017 model's capability defaults.
+	config := strings.ReplaceAll(modelConfig(t, "    has: []\n"), "cline-pass/deepseek-v4.1-flash", "cline-pass/deepseek-v4.1-flash-1017")
+	s, err := registerService(t, config)
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}

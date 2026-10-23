@@ -146,10 +146,17 @@ func TestModelWithClearedProvidersKeepsAutomaticRouting(t *testing.T) {
 				t.Fatalf("register: %v", err)
 			}
 			body := upstreamBodyOf(t, s, `{"messages":[{"role":"user","content":"hello"}]}`)
-			for _, key := range []string{"provider", "providerOptions"} {
-				if _, ok := body[key]; ok {
-					t.Errorf("an unpinned model must not gain %s, body = %v", key, body)
-				}
+			if _, ok := body["provider"]; ok {
+				t.Errorf("an unpinned model must not gain legacy provider routing, body = %v", body)
+			}
+			// Clearing providers removes only/order, independently of the 1017
+			// model's capability defaults. Other models still have no options.
+			wantOptions := `null`
+			if upstream == "cline-pass/deepseek-v4.1-flash-1017" {
+				wantOptions = `{"gateway":{"has":["vision","implicit-caching"]}}`
+			}
+			if got := string(jsonBytes(body["providerOptions"])); got != wantOptions {
+				t.Errorf("unpinned providerOptions = %s, want %s", got, wantOptions)
 			}
 		})
 	}

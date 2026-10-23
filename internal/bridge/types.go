@@ -156,7 +156,7 @@ type Config struct {
 }
 
 func defaultConfig() Config {
-	return Config{DataDir: "plugins/clinepassbridge-data", BaseURL: "https://api.cline.bot/api/v1", Models: []Model{{ID: "deepseek-v4.1-flash-1017", UpstreamID: "cline-pass/deepseek-v4.1-flash-1017", Providers: []string{"deepseek"}}}, NonstreamMode: "stream-aggregate", ClientRetryCompatibility: true, StreamIdleCutoffEnabled: false, StreamIdleTimeoutSeconds: 20, ProviderPolicy: ProviderPolicyConfig, TimeoutSeconds: 600, LogRetention: 1000, MaxResponseBytes: 64 << 20}
+	return Config{DataDir: "plugins/clinepassbridge-data", BaseURL: "https://api.cline.bot/api/v1", Models: []Model{{ID: "deepseek-v4.1-flash-1017", UpstreamID: "cline-pass/deepseek-v4.1-flash-1017", Providers: []string{"deepseek"}, Has: defaultHasFor("cline-pass/deepseek-v4.1-flash-1017")}}, NonstreamMode: "stream-aggregate", ClientRetryCompatibility: true, StreamIdleCutoffEnabled: false, StreamIdleTimeoutSeconds: 20, ProviderPolicy: ProviderPolicyConfig, TimeoutSeconds: 600, LogRetention: 1000, MaxResponseBytes: 64 << 20}
 }
 
 // Scalar settings support partial updates, but supplied collections replace the
@@ -260,9 +260,11 @@ func (c *Config) validate() error {
 			pinned[slug] = true
 			m.Providers[n] = slug
 		}
-		// A nil Has stays nil: unlike Providers there is no fresh-install
-		// default, because a capability filter the operator never asked for
-		// would silently re-route requests.
+		// Seed only never-set capability filters for this exact upstream model.
+		// Explicit [] and custom values remain operator overrides on every load.
+		if m.Has == nil {
+			m.Has = defaultHasFor(m.UpstreamID)
+		}
 		if len(m.Has) > maxModelHas {
 			return fail(400, "a model can filter on at most 8 capabilities")
 		}
@@ -285,6 +287,15 @@ func (c *Config) validate() error {
 		}
 	}
 	c.ReasoningMapping = nil
+	return nil
+}
+
+// defaultHasFor supplies capability defaults for the exact upstream model,
+// independent of its client-facing alias. Other upstreams keep no filter.
+func defaultHasFor(upstreamID string) []string {
+	if upstreamID == "cline-pass/deepseek-v4.1-flash-1017" {
+		return []string{"vision", "implicit-caching"}
+	}
 	return nil
 }
 

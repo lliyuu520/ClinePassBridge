@@ -627,7 +627,7 @@
     </section>
 
     <section id="pinPanel" role="tabpanel" aria-labelledby="pinTab" hidden>
-      <div class="notice with-action" role="note"><span>DeepSeek 1017 可应用组合预设，保存后用「测试模型」确认实际上游。</span><button class="button compact" id="openPinEvidence" type="button" data-icon="book">详细证据</button></div>
+      <div class="notice with-action" role="note"><span>DeepSeek 1017 未配置能力过滤时会默认填入两项能力；支持编辑和清空，实际上游以测试为准。</span><button class="button compact" id="openPinEvidence" type="button" data-icon="book">详细证据</button></div>
       <div class="panel">
         <div class="panel-head"><div><h2>上游策略</h2><p class="panel-hint">选择插件配置与客户端参数的优先级。</p></div><div class="pin-save-feedback"><span class="pin-save-status" id="providerPolicyState" role="status" aria-live="polite">自动保存</span><button class="button compact" id="retryProviderPolicy" type="button" data-icon="refresh" hidden>重试</button></div></div>
         <form class="pin-policy-layout" id="providerPolicyForm">
@@ -948,7 +948,7 @@
       <li><strong>DeepSeek 1017 only + has</strong>：连续 2 次为 <code>deepseek</code>；保留插件双字段格式再测 1 次，也为 <code>deepseek</code>，共 3/3。</li>
       <li><strong>无 1017 后缀 + 同样的组合</strong>：仍为 <code>openai-compatible-private</code>。</li>
     </ul>
-    <p>组合为 <code>only=[deepseek]</code> 与 <code>has=[vision, implicit-caching]</code>，对应上游模型 <code>cline-pass/deepseek-v4.1-flash-1017</code>。「应用 DeepSeek 预设」会同时填入这两组值并自动保存。</p>
+    <p>组合为 <code>only=[deepseek]</code> 与 <code>has=[vision, implicit-caching]</code>，对应上游模型 <code>cline-pass/deepseek-v4.1-flash-1017</code>。当前版本会为尚未设置能力过滤的这类模型默认填入两项能力；自定义值和主动清空会保留。「应用 DeepSeek 预设」可恢复完整组合并自动保存。</p>
     <p>判断以 <code>provider_metadata.gateway.routing.finalProvider</code> 为准：模型路径 <code>deepseek/…</code> 也可能由其他提供方服务。成功组合中的私有模型条目虽记为失败，但提供方尝试数为 0；本次只有一次实际提供方执行。</p>
     <p>这些结果验证了该账号当时的请求路由，其他账号与后续时段请用「测试模型」复核。能力标签用于筛选，图片支持与缓存效果需按实际业务另行确认；响应成本字段也不等同于账号实际扣费。</p>
     <form method="dialog" class="dialog-actions"><button class="button primary" autofocus data-icon="close">关闭</button></form>
